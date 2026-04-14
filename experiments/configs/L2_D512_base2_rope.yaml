@@ -9,7 +9,7 @@ d_ff: 2048
 dropout: 0.0
 pos_emb_type: rope
 
-lr: 3e-4
+lr: 0.0003
 weight_decay: 0.0
 num_steps: 100000
 batch_size: 64
