@@ -51,7 +51,7 @@ def extract_curves(metrics, carry_keys, split="iid", metric="acc"):
 
 def make_plot(
     steps, curves, agg, carry_keys, base, results_dir,
-    split="iid", metric="acc", log_y=False,
+    split="iid", metric="acc", log_x=False, log_y=False,
 ):
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -75,6 +75,8 @@ def make_plot(
 
     ax.plot(steps, agg, color="red", linewidth=3, label=f"Aggregate")
 
+    if log_x:
+        ax.set_xscale("log")
     if log_y:
         ax.set_yscale("log")
 
@@ -90,7 +92,12 @@ def make_plot(
     ax.legend(loc="best", fontsize=7, ncol=2)
     fig.tight_layout()
 
-    suffix = "_logy" if log_y else ""
+    parts = []
+    if log_x:
+        parts.append("logx")
+    if log_y:
+        parts.append("logy")
+    suffix = ("_" + "_".join(parts)) if parts else ""
     out = results_dir / "plots" / f"{split}_{metric}{suffix}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=200)
@@ -121,17 +128,14 @@ def main():
     ood_keys = sorted(ood_keys)
 
     for metric in ("acc", "loss"):
-        if iid_keys:
-            steps, curves, agg = extract_curves(metrics, iid_keys, "iid", metric)
-            make_plot(steps, curves, agg, iid_keys, base, results_dir, "iid", metric, log_y=False)
-            if metric == "loss":
-                make_plot(steps, curves, agg, iid_keys, base, results_dir, "iid", metric, log_y=True)
-
-        if ood_keys:
-            steps, curves, agg = extract_curves(metrics, ood_keys, "ood", metric)
-            make_plot(steps, curves, agg, ood_keys, base, results_dir, "ood", metric, log_y=False)
-            if metric == "loss":
-                make_plot(steps, curves, agg, ood_keys, base, results_dir, "ood", metric, log_y=True)
+        for split, keys in [("iid", iid_keys), ("ood", ood_keys)]:
+            if not keys:
+                continue
+            steps, curves, agg = extract_curves(metrics, keys, split, metric)
+            for log_x in (False, True):
+                make_plot(steps, curves, agg, keys, base, results_dir, split, metric, log_x=log_x, log_y=False)
+                if metric == "loss":
+                    make_plot(steps, curves, agg, keys, base, results_dir, split, metric, log_x=log_x, log_y=True)
 
 
 if __name__ == "__main__":
