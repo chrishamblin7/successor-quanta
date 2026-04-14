@@ -25,7 +25,7 @@ mkdir -p "$PROJECTS_DIR"
 cd "$PROJECTS_DIR"
 
 echo "[successor-quanta] Cloning repo..."
-git clone "https://github.com/After-Thought/successor-quanta.git" successor-quanta
+git clone "https://github.com/chrishamblin7/successor-quanta.git" successor-quanta
 cd successor-quanta
 
 # Setup environment
