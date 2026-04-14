@@ -55,15 +55,11 @@ class ExperimentConfig:
 
     @property
     def vocab_size(self) -> int:
-        return self.base + 1  # digits 0..base-1, plus SEP
+        return self.base
 
     @property
     def seq_len(self) -> int:
-        return 2 * self.n_positions + 1  # input + SEP + output
-
-    @property
-    def sep_token(self) -> int:
-        return self.base  # last token id
+        return self.n_positions
 
     def auto_run_name(self) -> str:
         if self.run_name:

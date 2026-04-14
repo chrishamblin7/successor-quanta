@@ -20,37 +20,34 @@ EVAL_BATCH_SIZE = 256
 
 
 def evaluate_set(
-    model, tokens: torch.Tensor, targets: torch.Tensor,
-    carries: np.ndarray, device: str, n_positions: int,
+    model, inputs: torch.Tensor, targets: torch.Tensor,
+    carries: np.ndarray, device: str,
 ) -> tuple[dict, float, float]:
     """Evaluate on a test set, returning per-carry-length and aggregate metrics.
 
-    Accuracy = fraction of samples where ALL output digits are correct.
+    Accuracy = fraction of samples where ALL output positions are correct.
     """
     model.eval()
     all_correct = []
     all_losses = []
-    N = len(tokens)
+    N = len(inputs)
 
     with torch.no_grad():
         for start in range(0, N, EVAL_BATCH_SIZE):
             end = min(start + EVAL_BATCH_SIZE, N)
-            xb = tokens[start:end].to(device)
+            xb = inputs[start:end].to(device)
             tb = targets[start:end].to(device)
 
-            logits = model(xb)  # (B, T, V)
-
-            output_logits = logits[:, n_positions + 1:, :]
-            output_targets = tb[:, n_positions + 1:]
-            B_chunk, T_out, V = output_logits.shape
+            logits = model(xb)  # (B, n, V)
+            B_chunk, T, V = logits.shape
 
             loss_per_token = F.cross_entropy(
-                output_logits.reshape(-1, V), output_targets.reshape(-1), reduction="none"
-            ).view(B_chunk, T_out)
+                logits.reshape(-1, V), tb.reshape(-1), reduction="none"
+            ).view(B_chunk, T)
             mean_loss_per_sample = loss_per_token.mean(dim=1)
 
-            preds = output_logits.argmax(dim=-1)
-            correct_per_sample = (preds == output_targets).all(dim=1)
+            preds = logits.argmax(dim=-1)
+            correct_per_sample = (preds == tb).all(dim=1)
 
             all_losses.append(mean_loss_per_sample.cpu())
             all_correct.append(correct_per_sample.cpu())
@@ -142,17 +139,81 @@ def train(cfg: ExperimentConfig):
     if cfg.resume:
         start_step, metrics_log = _try_resume(model, optimizer, run_dir)
 
+    early_eval_steps = {0, 1, 10, 50, 100}
+
+    def _run_eval(step_num, train_loss_val):
+        iid_per_carry, iid_acc, iid_loss = evaluate_set(
+            model, data.iid_inputs, data.iid_targets,
+            data.iid_carries, device,
+        )
+
+        ood_per_carry = {}
+        ood_total_correct = 0
+        ood_total_loss = 0.0
+        ood_total_n = 0
+        for k, inp in data.ood_inputs.items():
+            pk, _, _ = evaluate_set(
+                model, inp, data.ood_targets[k],
+                data.ood_carries[k], device,
+            )
+            if k in pk:
+                ood_per_carry[k] = pk[k]
+                ood_total_correct += pk[k]["acc"] * pk[k]["n"]
+                ood_total_loss += pk[k]["loss"] * pk[k]["n"]
+                ood_total_n += pk[k]["n"]
+
+        ood_acc = ood_total_correct / max(ood_total_n, 1)
+        ood_loss = ood_total_loss / max(ood_total_n, 1)
+
+        log_dict = {
+            "iid/acc": iid_acc, "iid/loss": iid_loss,
+            "ood/acc": ood_acc, "ood/loss": ood_loss,
+        }
+        for k, v in iid_per_carry.items():
+            log_dict[f"iid_acc/carry_{k}"] = v["acc"]
+            log_dict[f"iid_loss/carry_{k}"] = v["loss"]
+        for k, v in ood_per_carry.items():
+            log_dict[f"ood_acc/carry_{k}"] = v["acc"]
+            log_dict[f"ood_loss/carry_{k}"] = v["loss"]
+        wandb.log(log_dict, step=step_num)
+
+        entry = {
+            "step": step_num,
+            "train_loss": train_loss_val,
+            "iid": {
+                "agg_acc": iid_acc, "agg_loss": iid_loss,
+                "per_carry": {str(k): v for k, v in iid_per_carry.items()},
+            },
+            "ood": {
+                "agg_acc": ood_acc, "agg_loss": ood_loss,
+                "per_carry": {str(k): v for k, v in ood_per_carry.items()},
+            },
+        }
+        metrics_log.append(entry)
+
+        elapsed = time.time() - t0
+        print(
+            f"[{elapsed:7.1f}s] step {step_num:>6d}  "
+            f"train_loss={train_loss_val:.4f}  "
+            f"iid_acc={iid_acc:.4f}  ood_acc={ood_acc:.4f}"
+        )
+
+        _save_metrics(metrics_log, run_dir)
+        _regenerate_plots(run_dir)
+
     t0 = time.time()
+
+    if start_step <= 1 and 0 in early_eval_steps:
+        _run_eval(0, float("nan"))
+
     try:
         for step in range(start_step, cfg.num_steps + 1):
-            tokens, targets, _ = data.sample_batch(rng, cfg.batch_size, device)
+            inputs, targets, _ = data.sample_batch(rng, cfg.batch_size, device)
 
-            logits = model(tokens)
-            output_logits = logits[:, cfg.n_positions + 1:, :]
-            output_targets = targets[:, cfg.n_positions + 1:]
-            B, T_out, V = output_logits.shape
+            logits = model(inputs)  # (B, n, V)
+            V = logits.shape[-1]
             loss = F.cross_entropy(
-                output_logits.reshape(-1, V), output_targets.reshape(-1)
+                logits.reshape(-1, V), targets.reshape(-1)
             )
 
             optimizer.zero_grad()
@@ -162,65 +223,12 @@ def train(cfg: ExperimentConfig):
             if step % 100 == 0:
                 wandb.log({"train/loss": loss.item()}, step=step)
 
-            if step % cfg.eval_every == 0:
-                iid_per_carry, iid_acc, iid_loss = evaluate_set(
-                    model, data.iid_tokens, data.iid_targets,
-                    data.iid_carries, device, cfg.n_positions,
-                )
-
-                ood_per_carry = {}
-                ood_total_correct = 0
-                ood_total_loss = 0.0
-                ood_total_n = 0
-                for k, tok in data.ood_tokens.items():
-                    pk, _, _ = evaluate_set(
-                        model, tok, data.ood_targets[k],
-                        data.ood_carries[k], device, cfg.n_positions,
-                    )
-                    if k in pk:
-                        ood_per_carry[k] = pk[k]
-                        ood_total_correct += pk[k]["acc"] * pk[k]["n"]
-                        ood_total_loss += pk[k]["loss"] * pk[k]["n"]
-                        ood_total_n += pk[k]["n"]
-
-                ood_acc = ood_total_correct / max(ood_total_n, 1)
-                ood_loss = ood_total_loss / max(ood_total_n, 1)
-
-                log_dict = {
-                    "iid/acc": iid_acc, "iid/loss": iid_loss,
-                    "ood/acc": ood_acc, "ood/loss": ood_loss,
-                }
-                for k, v in iid_per_carry.items():
-                    log_dict[f"iid_acc/carry_{k}"] = v["acc"]
-                    log_dict[f"iid_loss/carry_{k}"] = v["loss"]
-                for k, v in ood_per_carry.items():
-                    log_dict[f"ood_acc/carry_{k}"] = v["acc"]
-                    log_dict[f"ood_loss/carry_{k}"] = v["loss"]
-                wandb.log(log_dict, step=step)
-
-                entry = {
-                    "step": step,
-                    "train_loss": loss.item(),
-                    "iid": {
-                        "agg_acc": iid_acc, "agg_loss": iid_loss,
-                        "per_carry": {str(k): v for k, v in iid_per_carry.items()},
-                    },
-                    "ood": {
-                        "agg_acc": ood_acc, "agg_loss": ood_loss,
-                        "per_carry": {str(k): v for k, v in ood_per_carry.items()},
-                    },
-                }
-                metrics_log.append(entry)
-
-                elapsed = time.time() - t0
-                print(
-                    f"[{elapsed:7.1f}s] step {step:>6d}  "
-                    f"train_loss={loss.item():.4f}  "
-                    f"iid_acc={iid_acc:.4f}  ood_acc={ood_acc:.4f}"
-                )
-
-                _save_metrics(metrics_log, run_dir)
-                _regenerate_plots(run_dir)
+            should_eval = (
+                step % cfg.eval_every == 0
+                or step in early_eval_steps
+            )
+            if should_eval:
+                _run_eval(step, loss.item())
 
             if step % cfg.checkpoint_every == 0:
                 torch.save(

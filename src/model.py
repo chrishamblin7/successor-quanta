@@ -55,7 +55,7 @@ class TransformerBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x: torch.Tensor, causal_mask: torch.Tensor,
+    def forward(self, x: torch.Tensor,
                 rope_cos: torch.Tensor | None = None,
                 rope_sin: torch.Tensor | None = None) -> torch.Tensor:
         B, T, D = x.shape
@@ -69,7 +69,7 @@ class TransformerBlock(nn.Module):
             q = _apply_rope(q, rope_cos, rope_sin)
             k = _apply_rope(k, rope_cos, rope_sin)
 
-        attn_out = F.scaled_dot_product_attention(q, k, v, attn_mask=causal_mask, is_causal=False)
+        attn_out = F.scaled_dot_product_attention(q, k, v)
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, D)
         attn_out = self.o_proj(attn_out)
 
@@ -79,10 +79,10 @@ class TransformerBlock(nn.Module):
 
 
 class SuccessorTransformer(nn.Module):
-    """Decoder-only transformer for the successor task.
+    """Bidirectional encoder for the successor task.
 
-    Input: sequence [x_1, ..., x_n, SEP, y_1, ..., y_n]
-    Output: per-position logits over vocab (predictions used at output positions).
+    Input: [x_1, ..., x_n] (the n-digit number)
+    Output: per-position logits over {0, ..., base-1} predicting [y_1, ..., y_n]
     """
 
     def __init__(
@@ -109,7 +109,6 @@ class SuccessorTransformer(nn.Module):
             self.pos_emb = nn.Embedding(seq_len, d_model)
         elif pos_emb_type == "sinusoidal":
             self.register_buffer("pos_emb", _sinusoidal_embeddings(seq_len, d_model))
-        # rope: no embedding table, applied inside attention
 
         self.blocks = nn.ModuleList([
             TransformerBlock(d_model, n_heads, d_ff, dropout, pos_emb_type)
@@ -135,16 +134,12 @@ class SuccessorTransformer(nn.Module):
         elif self.pos_emb_type == "sinusoidal":
             h = h + self.pos_emb[:T]
 
-        causal_mask = torch.triu(
-            torch.full((T, T), float("-inf"), device=x.device), diagonal=1
-        )
-
         rope_cos, rope_sin = None, None
         if self.pos_emb_type == "rope":
             rope_cos, rope_sin = _build_rope_cache(T, self.head_dim, x.device)
 
         for block in self.blocks:
-            h = block(h, causal_mask, rope_cos, rope_sin)
+            h = block(h, rope_cos, rope_sin)
 
         h = self.ln_f(h)
         return self.head(h)

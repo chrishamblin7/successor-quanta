@@ -130,26 +130,13 @@ def sample_powerlaw_batch(
 
 
 def encode_batch(
-    input_digits: np.ndarray, output_digits: np.ndarray, sep_token: int,
+    input_digits: np.ndarray, output_digits: np.ndarray,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode (input, output) pairs into token sequences and targets.
+    """Encode (input, output) pairs into tensors for the seq2seq model.
 
-    Sequence: [x_1, ..., x_n, SEP, y_1, ..., y_n]
-    Targets:  loss on positions n+1 .. 2n (the output digits), ignore rest.
-    Returns (tokens, targets) where targets[i] = -100 for ignored positions.
+    Returns (inputs, targets) both shape (B, n) as long tensors.
     """
-    B, n = input_digits.shape
-    seq_len = 2 * n + 1
-
-    tokens = np.zeros((B, seq_len), dtype=np.int64)
-    tokens[:, :n] = input_digits
-    tokens[:, n] = sep_token
-    tokens[:, n + 1:] = output_digits
-
-    targets = np.full((B, seq_len), -100, dtype=np.int64)
-    targets[:, n + 1:] = output_digits
-
-    return torch.from_numpy(tokens), torch.from_numpy(targets)
+    return torch.from_numpy(input_digits.astype(np.int64)), torch.from_numpy(output_digits.astype(np.int64))
 
 
 class SuccessorData:
@@ -158,7 +145,6 @@ class SuccessorData:
     def __init__(self, cfg):
         self.n_positions = cfg.n_positions
         self.base = cfg.base
-        self.sep_token = cfg.sep_token
         self.sampler_type = cfg.sampler_type
         self.carry_beta = cfg.carry_beta
 
@@ -168,13 +154,11 @@ class SuccessorData:
 
     def _build_iid_test(self, rng: np.random.Generator, n: int):
         inp, out, carries = sample_uniform_batch(rng, n, self.n_positions, self.base)
-        tokens, targets = encode_batch(inp, out, self.sep_token)
-        self.iid_tokens = tokens
-        self.iid_targets = targets
+        self.iid_inputs, self.iid_targets = encode_batch(inp, out)
         self.iid_carries = carries
 
     def _build_ood_test(self, rng: np.random.Generator, carry_ks: list[int], samples_per: int):
-        self.ood_tokens = {}
+        self.ood_inputs = {}
         self.ood_targets = {}
         self.ood_carries = {}
 
@@ -197,9 +181,9 @@ class SuccessorData:
                 out[:, j] = np.where(carry_active, new_val % self.base, out[:, j])
                 carry_active = carry_active & overflow
 
-            tokens, targets = encode_batch(digits, out, self.sep_token)
-            self.ood_tokens[k] = tokens
-            self.ood_targets[k] = targets
+            inp_t, tgt_t = encode_batch(digits, out)
+            self.ood_inputs[k] = inp_t
+            self.ood_targets[k] = tgt_t
             self.ood_carries[k] = np.full(samples_per, k, dtype=np.int64)
 
     def sample_batch(
@@ -213,5 +197,5 @@ class SuccessorData:
             inp, out, carries = sample_uniform_batch(
                 rng, batch_size, self.n_positions, self.base,
             )
-        tokens, targets = encode_batch(inp, out, self.sep_token)
-        return tokens.to(device), targets.to(device), carries
+        inputs, targets = encode_batch(inp, out)
+        return inputs.to(device), targets.to(device), carries
