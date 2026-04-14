@@ -75,7 +75,6 @@ def make_plot(
 
     ax.plot(steps, agg, color="red", linewidth=3, label=f"Aggregate")
 
-    ax.set_xscale("log")
     if log_y:
         ax.set_yscale("log")
 
