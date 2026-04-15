@@ -38,7 +38,7 @@ class ExperimentConfig:
     # --- Infrastructure ---
     seed: int = 42
     run_name: str = ""
-    gcs_bucket: str = "gs://cloud/misc/chris/successor-quanta/"
+    gcs_bucket: str = "/cloud/misc/chris/successor-quanta/"
     device: str = "cuda"
     wandb_project: str = "successor-quanta"
     resume: bool = False
