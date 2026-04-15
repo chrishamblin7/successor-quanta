@@ -12,6 +12,7 @@ import wandb
 
 from .config import ExperimentConfig
 from .data import SuccessorData
+from .diagnostics import generate_ood_diagnostics
 from .model import SuccessorTransformer
 from .utils import set_seed, sync_to_gcs
 
@@ -200,6 +201,10 @@ def train(cfg: ExperimentConfig):
 
         _save_metrics(metrics_log, run_dir)
         _regenerate_plots(run_dir)
+        try:
+            generate_ood_diagnostics(model, data, device, run_dir, step_num, cfg.base)
+        except Exception as e:
+            print(f"[diag] Warning: diagnostic generation failed: {e}")
 
     t0 = time.time()
 
