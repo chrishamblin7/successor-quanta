@@ -13,6 +13,7 @@ import wandb
 from .config import ExperimentConfig
 from .data import SuccessorData
 from .diagnostics import generate_ood_diagnostics
+from .losses import stablemax_cross_entropy
 from .model import SuccessorTransformer
 from .utils import set_seed, sync_to_gcs
 
@@ -20,9 +21,22 @@ from .utils import set_seed, sync_to_gcs
 EVAL_BATCH_SIZE = 256
 
 
+def _compute_token_loss(logits, targets, loss_type: str) -> torch.Tensor:
+    """Per-token loss using the specified loss function. Returns (B, T)."""
+    B, T, V = logits.shape
+    if loss_type == "stablemax":
+        return stablemax_cross_entropy(
+            logits.reshape(-1, V), targets.reshape(-1), reduction="none"
+        ).view(B, T)
+    return F.cross_entropy(
+        logits.reshape(-1, V), targets.reshape(-1), reduction="none"
+    ).view(B, T)
+
+
 def evaluate_set(
     model, inputs: torch.Tensor, targets: torch.Tensor,
     carries: np.ndarray, device: str,
+    loss_type: str = "cross_entropy",
 ) -> tuple[dict, float, float]:
     """Evaluate on a test set, returning per-carry-length and aggregate metrics.
 
@@ -40,11 +54,8 @@ def evaluate_set(
             tb = targets[start:end].to(device)
 
             logits = model(xb)  # (B, n, V)
-            B_chunk, T, V = logits.shape
 
-            loss_per_token = F.cross_entropy(
-                logits.reshape(-1, V), tb.reshape(-1), reduction="none"
-            ).view(B_chunk, T)
+            loss_per_token = _compute_token_loss(logits, tb, loss_type)
             mean_loss_per_sample = loss_per_token.mean(dim=1)
 
             preds = logits.argmax(dim=-1)
@@ -126,6 +137,7 @@ def train(cfg: ExperimentConfig):
     print(f"Base    : {cfg.base}")
     print(f"Sampler : {cfg.sampler_type}")
     print(f"Pos emb : {cfg.pos_emb_type}")
+    print(f"Loss    : {cfg.loss_type}")
     print(f"Device  : {device}")
     wandb.log({"n_params": n_params}, step=0)
 
@@ -145,7 +157,7 @@ def train(cfg: ExperimentConfig):
     def _run_eval(step_num, train_loss_val):
         iid_per_carry, iid_acc, iid_loss = evaluate_set(
             model, data.iid_inputs, data.iid_targets,
-            data.iid_carries, device,
+            data.iid_carries, device, cfg.loss_type,
         )
 
         ood_per_carry = {}
@@ -155,7 +167,7 @@ def train(cfg: ExperimentConfig):
         for k, inp in data.ood_inputs.items():
             pk, _, _ = evaluate_set(
                 model, inp, data.ood_targets[k],
-                data.ood_carries[k], device,
+                data.ood_carries[k], device, cfg.loss_type,
             )
             if k in pk:
                 ood_per_carry[k] = pk[k]
@@ -217,9 +229,14 @@ def train(cfg: ExperimentConfig):
 
             logits = model(inputs)  # (B, n, V)
             V = logits.shape[-1]
-            loss = F.cross_entropy(
-                logits.reshape(-1, V), targets.reshape(-1)
-            )
+            if cfg.loss_type == "stablemax":
+                loss = stablemax_cross_entropy(
+                    logits.reshape(-1, V), targets.reshape(-1)
+                )
+            else:
+                loss = F.cross_entropy(
+                    logits.reshape(-1, V), targets.reshape(-1)
+                )
 
             optimizer.zero_grad()
             loss.backward()

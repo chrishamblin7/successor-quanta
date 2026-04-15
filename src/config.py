@@ -23,6 +23,7 @@ class ExperimentConfig:
     # --- Training ---
     lr: float = 3e-4
     weight_decay: float = 0.0
+    loss_type: str = "cross_entropy"  # "cross_entropy" or "stablemax"
     num_steps: int = 100_000
     batch_size: int = 64
     eval_every: int = 1000
@@ -75,5 +76,7 @@ class ExperimentConfig:
             parts.append(self.sampler_type)
         if self.weight_decay > 0:
             parts.append(f"wd{self.weight_decay}")
+        if self.loss_type != "cross_entropy":
+            parts.append(self.loss_type)
         parts.append(f"s{self.seed}")
         return "_".join(parts)
