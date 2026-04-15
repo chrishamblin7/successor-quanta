@@ -49,7 +49,7 @@ def extract_curves(metrics, carry_keys, split="iid", metric="acc"):
     return np.array(steps), curves, np.array(agg)
 
 
-MAX_PLOT_K = 200
+MAX_PLOT_K = 300
 
 
 def make_plot(
