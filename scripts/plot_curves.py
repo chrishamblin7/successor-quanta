@@ -49,13 +49,20 @@ def extract_curves(metrics, carry_keys, split="iid", metric="acc"):
     return np.array(steps), curves, np.array(agg)
 
 
+MAX_PLOT_K = 200
+
+
 def make_plot(
     steps, curves, agg, carry_keys, base, results_dir,
     split="iid", metric="acc", log_x=False, log_y=False,
 ):
+    plot_keys = [k for k in carry_keys if k <= MAX_PLOT_K]
+    if not plot_keys:
+        return
+
     fig, ax = plt.subplots(figsize=(12, 7))
 
-    probs = {k: geometric_prob(k, base) for k in carry_keys}
+    probs = {k: geometric_prob(k, base) for k in plot_keys}
     valid_probs = [p for p in probs.values() if p > 0]
     if valid_probs:
         cmap = mpl.colormaps["viridis"].reversed()
@@ -65,15 +72,16 @@ def make_plot(
     else:
         sm = None
 
-    for k in carry_keys:
+    for k in plot_keys:
         vals = curves[k]
         if all(math.isnan(v) for v in vals):
             continue
         p = probs.get(k, 0.001)
         color = sm.to_rgba(p) if sm else None
-        ax.plot(steps, vals, color=color, alpha=0.7, linewidth=0.8, label=f"k={k}")
+        ax.plot(steps, vals, color=color, alpha=0.7, linewidth=0.8)
 
-    ax.plot(steps, agg, color="red", linewidth=3, label=f"Aggregate")
+    ax.plot(steps, agg, color="red", linewidth=3, label="Aggregate")
+    ax.legend(loc="best", fontsize=9)
 
     if log_x:
         ax.set_xscale("log")
@@ -83,13 +91,27 @@ def make_plot(
     ylabel = "Sequence Accuracy" if metric == "acc" else "CE Loss"
     ax.set_xlabel("Optimization Steps")
     ax.set_ylabel(f"{split.upper()} {ylabel}")
-    ax.set_title(f"{split.upper()} {ylabel} by Carry Length")
+    ax.set_title(f"{split.upper()} {ylabel} by Carry Length (base {base})")
 
     if sm and valid_probs:
         cbar = fig.colorbar(sm, ax=ax)
-        cbar.set_label("Carry length (colored by P(k) under uniform)")
+        cbar.set_label("P(k) under uniform sampling")
 
-    ax.legend(loc="best", fontsize=7, ncol=2)
+        k_ticks = [k for k in plot_keys if k > 0]
+        if len(k_ticks) > 12:
+            step = max(1, len(k_ticks) // 10)
+            k_ticks = k_ticks[::step]
+            if plot_keys[-1] not in k_ticks:
+                k_ticks.append(plot_keys[-1])
+        p_ticks = [geometric_prob(k, base) for k in k_ticks]
+
+        cbar_ax2 = cbar.ax.twinx()
+        cbar_ax2.set_ylim(cbar.ax.get_ylim())
+        cbar_ax2.set_yscale("log")
+        cbar_ax2.set_yticks(p_ticks)
+        cbar_ax2.set_yticklabels([f"k={k}" for k in k_ticks], fontsize=7)
+        cbar_ax2.tick_params(length=3, pad=2)
+
     fig.tight_layout()
 
     parts = []
