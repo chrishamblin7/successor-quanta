@@ -148,9 +148,10 @@ class SuccessorData:
         self.sampler_type = cfg.sampler_type
         self.carry_beta = cfg.carry_beta
 
+        carries = list(range(1, cfg.ood_max_carry + 1)) if cfg.ood_max_carry > 0 else cfg.ood_test_carries
         test_rng = np.random.default_rng(cfg.seed + 9999)
         self._build_iid_test(test_rng, cfg.iid_test_size)
-        self._build_ood_test(test_rng, cfg.ood_test_carries, cfg.ood_samples_per_carry)
+        self._build_ood_test(test_rng, carries, cfg.ood_samples_per_carry)
 
     def _build_iid_test(self, rng: np.random.Generator, n: int):
         inp, out, carries = sample_uniform_batch(rng, n, self.n_positions, self.base)

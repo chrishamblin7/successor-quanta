@@ -31,6 +31,7 @@ class ExperimentConfig:
     # --- Eval ---
     iid_test_size: int = 4096
     ood_test_carries: list = field(default_factory=lambda: [5, 10, 15, 20, 25, 30])
+    ood_max_carry: int = 0  # if > 0, overrides ood_test_carries with range(1, ood_max_carry+1)
     ood_samples_per_carry: int = 512
 
     # --- Infrastructure ---
